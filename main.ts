@@ -12,9 +12,10 @@ import {
 	requestUrl,
 } from "obsidian";
 import PatternRecognizer from "autoliter/patternRecognizer";
-import { getReplaceDict } from "autoliter/utils";
+import { buildReplaceDict, getPaperEntries } from "autoliter/utils";
 import { AutoLiterSettingTab } from "autoliter/settings";
 import { downloadPdf } from "autoliter/pdfManager";
+import type { PaperInfo } from "autoliter/types";
 
 interface AutoLiterSettings {
 	outputFormat: string;
@@ -24,18 +25,22 @@ interface AutoLiterSettings {
 	pdfDownloadPath: string;
 	pdfNameFormat: "title" | "id" | "custom";
 	customPdfNameFormat: string;
+	enableSemanticScholar: boolean;
+	semanticScholarApiKey: string;
 }
 
 const DEFAULT_SETTINGS: AutoLiterSettings = {
 	// example: "------\n**${title}** ([link](${url}))\n\t- *${author} et.al.*\n\t- ${journal}\n\t- ${pubDate}\n\n------\n"
 	outputFormat:
-		"- **${title}** ([link](${url}))\n\t- *${author} et.al.*\n\t- ${journal}\n\t- ${pubDate}",
+		"- **${title}**. *${author}*${venueYear}${linksText}${citationText}\n\t- ",
 	regExp: "- {.{3,}}",
 	autoDownloadPDF: false,
 	pdfDownloadPathBase: "vault",
 	pdfDownloadPath: "pdfs",
 	pdfNameFormat: "title",
 	customPdfNameFormat: "${title}",
+	enableSemanticScholar: false,
+	semanticScholarApiKey: "",
 };
 
 export default class AutoLiter extends Plugin {
@@ -103,26 +108,18 @@ export default class AutoLiter extends Plugin {
 
 		if (m && m.length != 0) {
 			const progressNotice = new Notice(`Updating ${file.path}...`);
-			const [replaceDict, pdfUrls, paperInfo] = await getReplaceDict(
+			const entries = await getPaperEntries(
 				m,
+				this.getSemanticScholarOptions()
+			);
+			await this.downloadPdfsForEntries(entries);
+			const [replaceDict] = buildReplaceDict(
+				entries,
 				this.settings.outputFormat
 			);
-			console.log(replaceDict);
-			this.app.vault.process(file, (data) => {
-				Object.keys(replaceDict).forEach((key, idx) => {
+			await this.app.vault.process(file, (data) => {
+				Object.keys(replaceDict).forEach((key) => {
 					data = data.replace(key, replaceDict[key] as string);
-					try {
-						this.settings.autoDownloadPDF &&
-							downloadPdf(
-								this.app,
-								pdfUrls[idx],
-								paperInfo[idx],
-								this.settings.pdfNameFormat,
-								this.settings.customPdfNameFormat,
-								this.settings.pdfDownloadPathBase,
-								this.settings.pdfDownloadPath
-							);
-					} catch (error) {}
 				});
 				return data;
 			});
@@ -136,8 +133,12 @@ export default class AutoLiter extends Plugin {
 		const m = paperRecognizer.findAll(selection);
 		if (m && m.length != 0) {
 			const progressNotice = new Notice(`Updating selection...`);
-			const [replaceDict, pdfUrls, paperInfo] = await getReplaceDict(
+			const entries = await getPaperEntries(
 				m,
+				this.getSemanticScholarOptions()
+			);
+			const [replaceDict] = buildReplaceDict(
+				entries,
 				this.settings.outputFormat
 			);
 			Object.keys(replaceDict).forEach((key) => {
@@ -164,6 +165,41 @@ export default class AutoLiter extends Plugin {
 			return basePath + relativePath.slice(1);
 		} else {
 			return basePath + "/" + relativePath;
+		}
+	}
+
+	private getSemanticScholarOptions() {
+		return {
+			enabled: this.settings.enableSemanticScholar,
+			apiKey: this.settings.semanticScholarApiKey.trim(),
+		};
+	}
+
+	private async downloadPdfsForEntries(
+		entries: Awaited<ReturnType<typeof getPaperEntries>>
+	): Promise<void> {
+		if (!this.settings.autoDownloadPDF) {
+			return;
+		}
+
+		for (const entry of entries) {
+			const info = entry.info as PaperInfo | undefined;
+			if (!info?.pdfUrl) {
+				continue;
+			}
+			const localPdfPath = await downloadPdf(
+				this.app,
+				info.pdfUrl,
+				info,
+				this.settings.pdfNameFormat,
+				this.settings.customPdfNameFormat,
+				this.settings.pdfDownloadPathBase,
+				this.settings.pdfDownloadPath
+			);
+			if (localPdfPath) {
+				info.localPdfPath = localPdfPath;
+				info.pdfUrl = localPdfPath;
+			}
 		}
 	}
 }

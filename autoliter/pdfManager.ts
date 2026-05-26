@@ -1,36 +1,38 @@
 import { App, Notice, requestUrl } from "obsidian";
 import { sanitizeFileName } from "./utils";
+import type { PaperInfo } from "autoliter/types";
 
 export async function downloadPdf(
 	app: App,
 	pdfUrl: string,
-	paperInfo: any,
+	paperInfo: PaperInfo,
 	pdfNameFormat: "title" | "id" | "custom",
 	customPdfNameFormat: string,
 	pdfDownloadPathBase: string,
 	pdfDownloadPath: string
-): Promise<void> {
+): Promise<string | null> {
 	try {
-		// 获取文件名
+		if (!pdfUrl) {
+			return null;
+		}
+
 		const fileName = sanitizeFileName(
-			paperInfo.title,
+			paperInfo.title || paperInfo.id || "paper",
 			pdfUrl,
 			paperInfo,
 			pdfNameFormat,
 			customPdfNameFormat
 		);
 
-		// 获取保存路径
 		const folderPath = await getPdfFolderPath(
 			app,
 			pdfDownloadPathBase,
 			pdfDownloadPath
 		);
 		if (!folderPath) {
-			return;
+			return null;
 		}
 
-		// 下载 PDF
 		const response = await requestUrl({
 			url: pdfUrl,
 			method: "GET",
@@ -38,12 +40,16 @@ export async function downloadPdf(
 		});
 		const uint8Array = new Uint8Array(response.arrayBuffer);
 
-		// 保存文件到 vault 中
 		const filePath = joinPaths(folderPath, fileName);
+		if (app.vault.getAbstractFileByPath(filePath)) {
+			return filePath;
+		}
 		await app.vault.createBinary(filePath, uint8Array);
 		new Notice(`Downloaded PDF: ${fileName}`);
+		return filePath;
 	} catch (error) {
-		throw new Notice(`Error downloading PDF: ${error.message}`);
+		new Notice(`Error downloading PDF: ${error.message}`);
+		return null;
 	}
 }
 
@@ -56,7 +62,6 @@ export async function getPdfFolderPath(
 	try {
 		if (pdfDownloadPathBase === "mdFile") {
 			const activeFile = app.workspace.getActiveFile();
-			// activeFile 的文件夹
 			if (activeFile) {
 				const activeFileFolder = activeFile.path
 					.split("/")
@@ -70,15 +75,17 @@ export async function getPdfFolderPath(
 			await app.vault.createFolder(pdfDownloadPath);
 		}
 	} catch (error) {
-		// Ignore if folder already exists
+		// Ignore if folder already exists.
 	}
 	return folderPath;
 }
 
 export function joinPaths(basePath: string, relativePath: string): string {
+	if (!basePath) {
+		return relativePath;
+	}
 	if (relativePath.startsWith("./")) {
 		return basePath + relativePath.slice(1);
-	} else {
-		return basePath + "/" + relativePath;
 	}
+	return basePath + "/" + relativePath;
 }
