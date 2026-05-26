@@ -1,6 +1,6 @@
 import parser from "rss-parser";
 import { assert } from "autoliter/utils";
-import type { Dict } from "autoliter/types";
+import type { PaperInfo } from "autoliter/types";
 import { requestUrl } from "obsidian";
 
 class ArxivInfo {
@@ -12,11 +12,9 @@ class ArxivInfo {
 		this.feedParser = new parser();
 	}
 
-	async getInfoByArxivId(arxivId: string): Promise<Dict> {
+	async getInfoByArxivId(arxivId: string): Promise<PaperInfo> {
 		// if arxivID's prefix is "arXiv:", remove it
-		if (arxivId.startsWith("arXiv:")) {
-			arxivId = arxivId.slice(6);
-		}
+		arxivId = this.normalizeArxivId(arxivId);
 		const params = `?id_list=${arxivId}`;
 		try {
 			// const results = await this.feedParser.parseURL(this.base_url + params);
@@ -40,8 +38,8 @@ class ArxivInfo {
 		}
 	}
 
-	extractInfo(data: any, arxivId: string): Dict {
-		const title: string = data["title"];
+	extractInfo(data: any, arxivId: string): PaperInfo {
+		const title: string = this.clean(data["title"]);
 		const author: string = data["author"] || "No author";
 		const journal = "Arxiv";
 		const date = new Date(data["pubDate"]);
@@ -53,7 +51,30 @@ class ArxivInfo {
 		const pubDate = `${year}-${month}-${day}`;
 		const url: string = data["link"];
 		const pdfUrl: string = `https://arxiv.org/pdf/${arxivId}.pdf`;
-		return { title, author, journal, pubDate, url, pdfUrl };
+		return {
+			title,
+			author,
+			journal,
+			venue: journal,
+			pubDate,
+			year: String(year),
+			url,
+			arxivId,
+			arxivUrl: url,
+			pdfUrl,
+		};
+	}
+
+	private normalizeArxivId(arxivId: string): string {
+		return arxivId
+			.replace(/^arXiv:/i, "")
+			.split("/")
+			.pop()
+			?.replace(/v\d+$/i, "") || arxivId;
+	}
+
+	private clean(value: string): string {
+		return String(value || "").split(/\s+/).join(" ").trim();
 	}
 }
 

@@ -45,6 +45,39 @@ export class AutoLiterSettingTab extends PluginSettingTab {
 						"width: 100%; height: 100px;")
 			);
 
+		// Metadata enrichment
+		containerEl.createEl("h2", { text: "Metadata enrichment" });
+
+		new Setting(containerEl)
+			.setName("Enable Semantic Scholar")
+			.setDesc(
+				"Optionally enrich entries with S2 links, citation counts, venue data, and open-access PDFs."
+			)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.enableSemanticScholar)
+					.onChange(async (value) => {
+						this.plugin.settings.enableSemanticScholar = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Semantic Scholar API key")
+			.setDesc(
+				"Optional. Leave empty to use the public API; adding a key reduces rate-limit failures."
+			)
+			.addText((text) => {
+				text.inputEl.type = "password";
+				return text
+					.setPlaceholder("optional API key")
+					.setValue(this.plugin.settings.semanticScholarApiKey)
+					.onChange(async (value) => {
+						this.plugin.settings.semanticScholarApiKey = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
 		// PDF Settings
 		containerEl.createEl('h2', {text: 'PDF File'});
 

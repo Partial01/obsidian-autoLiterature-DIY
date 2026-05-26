@@ -1,11 +1,10 @@
 {
-	"id": "auto-literature",
+	"id": "AutoLiter_SELF",
 	"name": "autoLiterature",
 	"version": "1.2.2",
 	"minAppVersion": "0.15.0",
-	"description": "Assist you in taking notes for your literature.",
-	"author": "hucorz",
-	"authorUrl": "https://github.com/hucorz",
+	"description": "Assist you in taking notes for your literature. Inspired by https://github.com/hucorz",
+	"author": "Partial01",
+	"authorUrl": "https://github.com/",
 	"isDesktopOnly": true
 }
- 

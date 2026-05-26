@@ -1,6 +1,6 @@
 import CrossrefInfo from "./crossrefInfo";
-import { Dict } from "autoliter/types";
-import { requestUrl } from 'obsidian'
+import { PaperInfo } from "autoliter/types";
+import { requestUrl } from "obsidian";
 
 
 class BMInfo {
@@ -12,12 +12,12 @@ class BMInfo {
         this.server = ["medrxiv", "biorxiv"]
     }
 
-    async getInfoByBMId(bmId: string): Promise<Dict> {
+    async getInfoByBMId(bmId: string): Promise<PaperInfo> {
         const urls = this.server.map(server => `${this.base_url}${server}/${bmId}`);
         for (let url of urls) {
             try {
                 // const response = await axios.get(url);
-                const response = await requestUrl(url).json; // use obsidian's requestUrl to avoid cors
+                const response = (await requestUrl(url)).json; // use obsidian's requestUrl to avoid cors
                 if (response['collection'].length > 0) {
                     const data = response['collection'][0];
                     if (data['published'] !== "NA") {
@@ -32,13 +32,15 @@ class BMInfo {
         throw new Error(`Error in getInfoByBMxivId: No posts found`);
     }
 
-    extractInfo(data: any): Dict {
+    extractInfo(data: any): PaperInfo {
         const title: string = data['title'];
         const author: string = data['author_corresponding'] || "No author";
         const journal = "BMrxiv";
         const pubDate = data['date'];
+        const year = pubDate.split("-")[0] || "";
+        const doi = data['doi'];
         const url: string = `https://doi.org/${data['doi']}`;
-        return { title, author, journal, pubDate, url }
+        return { title, author, journal, venue: journal, pubDate, year, url, doi, doiUrl: url }
     }
 }
 
