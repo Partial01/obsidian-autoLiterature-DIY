@@ -1,5 +1,7 @@
 import Spider from "./spiders/spider";
 import type { Dict, PaperInfo, SemanticScholarOptions } from "autoliter/types";
+import { citationText, citationUrl, targetForPaper, validCitationCount } from "./citationLinks";
+import { errorMessage } from "./spiders/response";
 
 interface PaperEntry {
 	origin: string;
@@ -36,23 +38,26 @@ async function getPaperEntries(
 	semanticOptions?: SemanticScholarOptions
 ): Promise<PaperEntry[]> {
 	const spider = new Spider();
+	const cache = new Map<string, Promise<PaperInfo>>();
 
 	return await Promise.all(
 		m.map(async (literature) => {
 			const origin = literature[0];
 			const paperID = extractPaperId(origin);
 			try {
-				const info = await spider.getPaperInfo(
-					paperID,
-					semanticOptions
-				);
+				let pending = cache.get(paperID);
+				if (!pending) {
+					pending = spider.getPaperInfo(paperID, semanticOptions);
+					cache.set(paperID, pending);
+				}
+				const info = await pending;
 				info.id = paperID;
 				return { origin, paperID, info };
-			} catch (error) {
+			} catch (error: unknown) {
 				return {
 					origin,
 					paperID,
-					error: `Error in getPaperEntries: ${error.message}`,
+					error: `Error in getPaperEntries: ${errorMessage(error)}`,
 				};
 			}
 		})
@@ -95,6 +100,7 @@ function buildReplaceDict(
 
 function formatPaperInfo(info: PaperInfo, outputFormat: string): string {
 	normalizePaperInfo(info);
+	const target = targetForPaper(info);
 	const values: Record<string, string> = {
 		title: text(info.title),
 		author: firstAuthor(info),
@@ -115,19 +121,19 @@ function formatPaperInfo(info: PaperInfo, outputFormat: string): string {
 				? ""
 				: String(info.citationCount),
 		citationText:
-			info.citationCount === undefined || info.citationCount === null
-				? ""
-				: ` (Citations ${info.citationCount})`,
+			citationText(info),
+		citationUrl: target ? citationUrl(target) : "",
 		links: buildLinks(info),
 		linksText: buildLinks(info) ? ` ${buildLinks(info)}` : "",
 		venueYear: buildVenueYear(info),
 	};
 
-	return outputFormat.replace(/\$\{([^}]+)\}/g, (match, key) => {
+	const formatted = outputFormat.replace(/\$\{([^}]+)\}/g, (match, key) => {
 		return Object.prototype.hasOwnProperty.call(values, key)
 			? values[key]
 			: match;
 	});
+	return formatted;
 }
 
 function normalizePaperInfo(info: PaperInfo): PaperInfo {
@@ -154,6 +160,7 @@ function normalizePaperInfo(info: PaperInfo): PaperInfo {
 	info.s2Url = cleanValue(info.s2Url || info.semanticScholar?.url);
 	info.citationCount =
 		info.semanticScholar?.citationCount ?? info.citationCount;
+	if (!validCitationCount(info.citationCount)) info.citationCount = undefined;
 	info.pdfUrl =
 		cleanValue(info.localPdfPath) ||
 		cleanValue(info.pdfUrl) ||
@@ -213,7 +220,7 @@ function firstAuthor(info: PaperInfo): string {
 }
 
 function extractPaperId(literature: string): string {
-	return literature.split("{").pop()?.split("}")[0] || "";
+	return (literature.split("{").pop()?.split("}")[0] || "").trim();
 }
 
 function cleanValue(value: any): string {

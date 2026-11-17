@@ -1,30 +1,33 @@
 import { requestUrl } from "obsidian";
 import type { SemanticScholarInfo } from "autoliter/types";
+import { isRecord, withTimeout } from "./response";
 
-const FIELDS = "title,year,venue,url,citationCount,openAccessPdf,authors";
+const FIELDS = "paperId,externalIds,title,year,venue,url,citationCount,openAccessPdf,authors";
 const BASE_URL = "https://api.semanticscholar.org/graph/v1/paper/";
 const SEARCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search";
 const MIN_REQUEST_INTERVAL_MS = 1000;
 
 class SemanticScholarClient {
-	private lastRequestTime = 0;
-	private requestQueue: Promise<void> = Promise.resolve();
+	private static lastRequestTime = 0;
+	private static requestQueue: Promise<void> = Promise.resolve();
 
 	async getInfo(params: {
+		s2Id?: string;
 		doi?: string;
 		arxivId?: string;
 		title?: string;
 		apiKey?: string;
 	}): Promise<SemanticScholarInfo | null> {
-		const paperKey = this.getPaperKey(params.doi, params.arxivId);
+		const paperKey = params.s2Id || this.getPaperKey(params.doi, params.arxivId);
 		if (paperKey) {
 			const direct = await this.requestJson(
 				`${BASE_URL}${encodeURIComponent(paperKey)}`,
 				{ fields: FIELDS },
 				params.apiKey
 			);
-			if (direct) {
-				return direct;
+			const info = this.parsePaper(direct);
+			if (info) {
+				return info;
 			}
 		}
 
@@ -62,7 +65,7 @@ class SemanticScholarClient {
 		url: string,
 		params: Record<string, string>,
 		apiKey?: string
-	): Promise<any | null> {
+	): Promise<unknown> {
 		try {
 			await this.throttle();
 			const query = new URLSearchParams(params).toString();
@@ -70,11 +73,11 @@ class SemanticScholarClient {
 			if (apiKey) {
 				headers["x-api-key"] = apiKey;
 			}
-			const response = await requestUrl({
+			const response = await withTimeout(requestUrl({
 				url: `${url}?${query}`,
 				method: "GET",
 				headers,
-			});
+			}), "Semantic Scholar");
 			return response.json && typeof response.json === "object"
 				? response.json
 				: null;
@@ -84,34 +87,53 @@ class SemanticScholarClient {
 	}
 
 	private async throttle(): Promise<void> {
-		this.requestQueue = this.requestQueue.then(async () => {
-			const elapsed = Date.now() - this.lastRequestTime;
-			if (this.lastRequestTime && elapsed < MIN_REQUEST_INTERVAL_MS) {
+		SemanticScholarClient.requestQueue = SemanticScholarClient.requestQueue.then(async () => {
+			const elapsed = Date.now() - SemanticScholarClient.lastRequestTime;
+			if (SemanticScholarClient.lastRequestTime && elapsed < MIN_REQUEST_INTERVAL_MS) {
 				await new Promise((resolve) =>
 					setTimeout(resolve, MIN_REQUEST_INTERVAL_MS - elapsed)
 				);
 			}
-			this.lastRequestTime = Date.now();
+			SemanticScholarClient.lastRequestTime = Date.now();
 		});
-		return this.requestQueue;
+		return SemanticScholarClient.requestQueue;
 	}
 
 	private selectExactTitleMatch(
-		searchData: any,
+		searchData: unknown,
 		title: string
 	): SemanticScholarInfo | null {
-		const papers = Array.isArray(searchData?.data) ? searchData.data : [];
+		const papers = isRecord(searchData) && Array.isArray(searchData.data) ? searchData.data : [];
 		const normalizedTitle = this.normalizeTitle(title);
-		return (
-			papers.find(
-				(paper: SemanticScholarInfo) =>
-					this.normalizeTitle(paper.title) === normalizedTitle
-			) || null
-		);
+		const matches = papers.map((paper: unknown) => this.parsePaper(paper))
+			.filter((paper): paper is SemanticScholarInfo => paper !== null
+				&& this.normalizeTitle(paper.title) === normalizedTitle);
+		return matches.length === 1 ? matches[0] : null;
+	}
+
+	private parsePaper(data: unknown): SemanticScholarInfo | null {
+		if (!isRecord(data) || typeof data.title !== "string" || !data.title.trim()) return null;
+		const count = data.citationCount;
+		return {
+			paperId: typeof data.paperId === "string" && /^[a-f\d]{40}$/i.test(data.paperId) ? data.paperId : undefined,
+			externalIds: isRecord(data.externalIds) ? {
+				DOI: typeof data.externalIds.DOI === "string" ? data.externalIds.DOI : undefined,
+				ArXiv: typeof data.externalIds.ArXiv === "string" ? data.externalIds.ArXiv : undefined,
+			} : undefined,
+			title: data.title,
+			year: typeof data.year === "number" ? data.year : undefined,
+			venue: typeof data.venue === "string" ? data.venue : undefined,
+			url: typeof data.url === "string" ? data.url : undefined,
+			citationCount: typeof count === "number" && Number.isSafeInteger(count) && count >= 0 ? count : undefined,
+			openAccessPdf: isRecord(data.openAccessPdf) && typeof data.openAccessPdf.url === "string"
+				? { url: data.openAccessPdf.url } : undefined,
+			authors: Array.isArray(data.authors) ? data.authors.filter(isRecord)
+				.filter((author) => typeof author.name === "string").map((author) => ({ name: String(author.name) })) : [],
+		};
 	}
 
 	private normalizeTitle(title?: string): string {
-		return title ? title.split(/\s+/).join(" ").trim().toLowerCase() : "";
+		return title ? title.replace(/[{}]/g, "").split(/\s+/).join(" ").trim().toLowerCase() : "";
 	}
 }
 

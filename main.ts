@@ -16,6 +16,7 @@ import { buildReplaceDict, getPaperEntries } from "autoliter/utils";
 import { AutoLiterSettingTab } from "autoliter/settings";
 import { downloadPdf } from "autoliter/pdfManager";
 import type { PaperInfo } from "autoliter/types";
+import { updateCitations } from "autoliter/citations";
 
 interface AutoLiterSettings {
 	outputFormat: string;
@@ -27,13 +28,14 @@ interface AutoLiterSettings {
 	customPdfNameFormat: string;
 	enableSemanticScholar: boolean;
 	semanticScholarApiKey: string;
+	refreshCitationCounts: boolean;
 }
 
 const DEFAULT_SETTINGS: AutoLiterSettings = {
 	// example: "------\n**${title}** ([link](${url}))\n\t- *${author} et.al.*\n\t- ${journal}\n\t- ${pubDate}\n\n------\n"
 	outputFormat:
 		"- **${title}**. *${author}*${venueYear}${linksText}${citationText}\n\t- ",
-	regExp: "- {.{3,}}",
+	regExp: "- \\{[^{}\\r\\n]+\\}",
 	autoDownloadPDF: false,
 	pdfDownloadPathBase: "vault",
 	pdfDownloadPath: "pdfs",
@@ -41,11 +43,13 @@ const DEFAULT_SETTINGS: AutoLiterSettings = {
 	customPdfNameFormat: "${title}",
 	enableSemanticScholar: false,
 	semanticScholarApiKey: "",
+	refreshCitationCounts: false,
 };
 
 export default class AutoLiter extends Plugin {
 	settings: AutoLiterSettings;
 	paperRecognizer: PatternRecognizer;
+	private updatingFiles = new Set<string>();
 
 	async onload() {
 		await this.loadSettings();
@@ -73,13 +77,9 @@ export default class AutoLiter extends Plugin {
 			name: "Update the whole vault",
 			editorCallback: async (editor: Editor) => {
 				new Notice("start updating vault.");
-				await Promise.all(
-					this.app.vault
-						.getMarkdownFiles()
-						.map((file) =>
-							this.updateFile(file, this.paperRecognizer)
-						)
-				);
+				for (const file of this.app.vault.getMarkdownFiles()) {
+					await this.updateFile(file, this.paperRecognizer);
+				}
 				new Notice("finish updating vault.");
 			},
 		});
@@ -91,9 +91,17 @@ export default class AutoLiter extends Plugin {
 			editorCallback: async (editor: Editor) => {
 				new Notice("start updating selection.");
 				const selection = editor.getSelection();
-				editor.replaceSelection(
-					await this.updateSelected(selection, this.paperRecognizer)
-				);
+				const from = editor.getCursor("from");
+				const to = editor.getCursor("to");
+				const updated = await this.updateSelected(selection, this.paperRecognizer);
+				const currentFrom = editor.getCursor("from");
+				const currentTo = editor.getCursor("to");
+				if (editor.getSelection() === selection && from.line === currentFrom.line && from.ch === currentFrom.ch
+					&& to.line === currentTo.line && to.ch === currentTo.ch) {
+					editor.replaceSelection(updated);
+				} else {
+					new Notice("Selection changed during lookup; skipped to preserve your edits.");
+				}
 				new Notice("finish updating selection.");
 			},
 		});
@@ -102,27 +110,21 @@ export default class AutoLiter extends Plugin {
 	onunload() {}
 
 	async updateFile(file: TFile, paperRecognizer: PatternRecognizer) {
-		const content = await this.app.vault.read(file);
-		const m = paperRecognizer.findAll(content);
-		console.log(this.app.workspace.getActiveFile());
-
-		if (m && m.length != 0) {
-			const progressNotice = new Notice(`Updating ${file.path}...`);
-			const entries = await getPaperEntries(
-				m,
-				this.getSemanticScholarOptions()
-			);
-			await this.downloadPdfsForEntries(entries);
-			const [replaceDict] = buildReplaceDict(
-				entries,
-				this.settings.outputFormat
-			);
-			await this.app.vault.process(file, (data) => {
-				Object.keys(replaceDict).forEach((key) => {
-					data = data.replace(key, replaceDict[key] as string);
-				});
-				return data;
+		if (this.updatingFiles.has(file.path)) return;
+		this.updatingFiles.add(file.path);
+		try {
+			const content = await this.app.vault.read(file);
+			const updated = await this.prepareUpdate(content, paperRecognizer, true);
+			if (updated === content) return;
+			await this.app.vault.process(file, (current) => {
+				if (current !== content) {
+					new Notice("Note changed during lookup; skipped to preserve your edits.");
+					return current;
+				}
+				return updated;
 			});
+		} finally {
+			this.updatingFiles.delete(file.path);
 		}
 	}
 
@@ -130,22 +132,28 @@ export default class AutoLiter extends Plugin {
 		selection: string,
 		paperRecognizer: PatternRecognizer
 	) {
-		const m = paperRecognizer.findAll(selection);
-		if (m && m.length != 0) {
-			const progressNotice = new Notice(`Updating selection...`);
-			const entries = await getPaperEntries(
-				m,
-				this.getSemanticScholarOptions()
-			);
-			const [replaceDict] = buildReplaceDict(
-				entries,
-				this.settings.outputFormat
-			);
-			Object.keys(replaceDict).forEach((key) => {
-				selection = selection.replace(key, replaceDict[key] as string);
-			});
+		return this.prepareUpdate(selection, paperRecognizer, false);
+	}
+
+	private async prepareUpdate(content: string, recognizer: PatternRecognizer, download: boolean): Promise<string> {
+		const options = this.getSemanticScholarOptions();
+		let updated = content;
+		// Refresh the original entries first, so new placeholders are fetched only once per click.
+		const result = await updateCitations(content, { semantic: options, refreshCounts: this.settings.refreshCitationCounts });
+		updated = result.content;
+		if (result.updated || result.failed || result.skipped || result.migrated) {
+			new Notice(`Citations: ${result.updated} refreshed, ${result.migrated} comments converted, ${result.failed} unavailable, ${result.skipped} skipped.`);
 		}
-		return selection;
+		const matches = recognizer.findAll(updated);
+		if (!matches?.length) return updated;
+		const entries = await getPaperEntries(matches, options);
+		if (download) await this.downloadPdfsForEntries(entries);
+		const [replacements] = buildReplaceDict(entries, this.settings.outputFormat);
+		// Apply the original match positions backwards, including repeated identical placeholders.
+		for (const match of [...matches].reverse()) {
+			updated = updated.slice(0, match.index) + replacements[match[0]] + updated.slice(match.index + match[0].length);
+		}
+		return updated;
 	}
 
 	async loadSettings() {
@@ -154,6 +162,9 @@ export default class AutoLiter extends Plugin {
 			DEFAULT_SETTINGS,
 			await this.loadData()
 		);
+		if (["- {.{3,}}", "- \\{.{3,}\\}"].includes(this.settings.regExp)) {
+			this.settings.regExp = DEFAULT_SETTINGS.regExp;
+		}
 	}
 
 	async saveSettings() {

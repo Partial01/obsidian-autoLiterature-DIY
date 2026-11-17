@@ -49,6 +49,16 @@ export class AutoLiterSettingTab extends PluginSettingTab {
 		containerEl.createEl("h2", { text: "Metadata enrichment" });
 
 		new Setting(containerEl)
+			.setName("Refresh citation counts when updating")
+			.setDesc("Also refresh dedicated Citations links when using the existing update actions. Entries without these links are skipped; unavailable counts keep their old values.")
+			.addToggle((toggle) => toggle
+				.setValue(this.plugin.settings.refreshCitationCounts)
+				.onChange(async (value) => {
+					this.plugin.settings.refreshCitationCounts = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
 			.setName("Enable Semantic Scholar")
 			.setDesc(
 				"Optionally enrich entries with S2 links, citation counts, venue data, and open-access PDFs."
