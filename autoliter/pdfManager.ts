@@ -1,6 +1,7 @@
 import { App, Notice, requestUrl } from "obsidian";
 import { sanitizeFileName } from "./utils";
 import type { PaperInfo } from "autoliter/types";
+import { errorMessage } from "./spiders/response";
 
 export async function downloadPdf(
 	app: App,
@@ -47,8 +48,8 @@ export async function downloadPdf(
 		await app.vault.createBinary(filePath, uint8Array);
 		new Notice(`Downloaded PDF: ${fileName}`);
 		return filePath;
-	} catch (error) {
-		new Notice(`Error downloading PDF: ${error.message}`);
+	} catch (error: unknown) {
+		new Notice(`Error downloading PDF: ${errorMessage(error)}`);
 		return null;
 	}
 }

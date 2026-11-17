@@ -4,6 +4,10 @@
 	"description": "Assist you in taking notes for your literature.",
 	"main": "main.js",
 	"scripts": {
+		"test": "node tests/run.cjs",
+		"check:public": "node scripts/check-public.cjs",
+		"test:usenix-live": "node tests/usenix-live.cjs",
+		"test:citations-live": "node tests/citations-live.cjs",
 		"dev": "node esbuild.config.mjs",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
 		"version": "node version-bump.mjs && git add manifest.json versions.json"

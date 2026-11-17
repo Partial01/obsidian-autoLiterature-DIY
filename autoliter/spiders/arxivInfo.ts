@@ -2,6 +2,7 @@ import parser from "rss-parser";
 import { assert } from "autoliter/utils";
 import type { PaperInfo } from "autoliter/types";
 import { requestUrl } from "obsidian";
+import { PublicError, errorMessage } from "./response";
 
 const ARXIV_MIN_REQUEST_INTERVAL_MS = 3500;
 const ARXIV_MAX_RETRIES = 4;
@@ -36,16 +37,11 @@ class ArxivInfo {
 				data.items.length === 1,
 				"ArxivId should return only one result"
 			);
-			console.log(data);
 			// TODO: get doi info
 			// It seems that arxiv api can not get the doi info
 			return this.extractInfo(data.items[0], arxivId);
-		} catch (error) {
-			throw new Error(
-				`Error in getInfoByArxivId: ${
-					(error as Error).message
-				}(request url: ${url})`
-			);
+		} catch (error: unknown) {
+			throw new PublicError(`arXiv lookup failed: ${errorMessage(error)}`);
 		}
 	}
 

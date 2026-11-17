@@ -1,5 +1,6 @@
 import type { PaperInfo } from "autoliter/types";
 import { requestUrl } from "obsidian";
+import { isRecord, strings, errorMessage, withTimeout, PublicError } from "./response";
 
 // const HEADERS = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:27.0) Gecko/20100101 Firefox/43.0'};
 
@@ -10,37 +11,60 @@ class CrossrefInfo {
         this.base_url = "https://api.crossref.org/";
     }
 
-    async getInfoByDoi(doi: string): Promise<PaperInfo> {
-        const url = `${this.base_url}works/${doi}`;
+    async getInfoByDoi(input: string): Promise<PaperInfo> {
+        const doi = input.trim().replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "");
+        let response;
         try {
-            const response = await requestUrl(url);
-            return this.extractInfo(response.json['message']);
-        } catch (error) {
-            throw new Error(`Error in getInfoByDoi: ${error.message}(request url: ${url})`);
+            response = await withTimeout(requestUrl({
+                url: `${this.base_url}works/${encodeURIComponent(doi)}`,
+                throw: false,
+            }), "Crossref");
+        } catch (error: unknown) {
+            throw new PublicError(`Crossref request failed: ${errorMessage(error)}`);
+        }
+        if (response.status !== 200) {
+            const hint = response.status === 404
+                ? doi.startsWith("10.5555/")
+                    ? "No Crossref record. 10.5555 contains test/unmaintained records; an ACM catalog ID may not be a registered DOI. Use the official USENIX presentation URL when available."
+                    : "No Crossref record for this DOI."
+                : response.status === 429 ? "Rate limited; retry later." : "Provider refused or failed the request.";
+            throw new PublicError(`Crossref HTTP ${response.status}: ${hint}`);
+        }
+        try {
+            const payload: unknown = response.json;
+            if (!isRecord(payload)) throw new PublicError("Invalid response envelope");
+            return this.extractInfo(payload.message);
+        } catch (error: unknown) {
+            throw new PublicError(`Crossref metadata error: ${errorMessage(error)}`);
         }
     }
 
-    extractInfo(data: any): PaperInfo {
-        const title: string = data['title'][0];
-        const author: string = data['author'] && data['author'].length > 0
-            ? data['author']
-                .map((i: any) => `${i.given || ""} ${i.family || ""}`.trim())
-                .filter(Boolean)
-                .join(" and ")
-            : "No author";
-        const shortContainerTitle = data['short-container-title']?.[0];
-        const containerTitle = data['container-title']?.[0];
+    extractInfo(data: unknown): PaperInfo {
+        if (!isRecord(data)) throw new PublicError("Missing work metadata");
+        const title = strings(data.title)[0];
+        if (!title) throw new PublicError("Missing title");
+        const author = Array.isArray(data.author) ? data.author.filter(isRecord).map((item) =>
+            [item.given, item.family, item.name].filter((value) => typeof value === "string").join(" ").trim()
+        ).filter(Boolean).join(" and ") : "";
+        const shortContainerTitle = strings(data['short-container-title'])[0];
+        const containerTitle = strings(data['container-title'])[0];
         const journal = shortContainerTitle || containerTitle || "No journal";
-        const dateParts = data['published']?.["date-parts"]?.[0] || [];
-        const pubDate = dateParts.map((i: number) => String(i)).join('-');
+        const date = [data.published, data['published-print'], data['published-online'], data.issued]
+            .filter(isRecord).map((item) => item['date-parts'])
+            .find((parts) => Array.isArray(parts) && Array.isArray(parts[0]));
+        const dateParts = Array.isArray(date) && Array.isArray(date[0])
+            ? date[0].filter((part: unknown) => typeof part === "number" && Number.isInteger(part)) : [];
+        const pubDate = dateParts.join('-');
         const year = dateParts[0] ? String(dateParts[0]) : "";
-        const url: string = data['URL'];
-        const doi: string = data['DOI'];
+        const doi = typeof data.DOI === "string" ? data.DOI : "";
         const doiUrl = doi ? `https://doi.org/${doi}` : "";
-        const pdfUrl = (data.link || []).find((link: any) =>
-            String(link?.["content-type"] || "").includes("pdf")
-        )?.URL || data.link?.[0]?.URL || "";
-        const citationCount = data['is-referenced-by-count'];
+        const url = typeof data.URL === "string" ? data.URL : doiUrl;
+        const pdf = Array.isArray(data.link) ? data.link.filter(isRecord).find((link) =>
+            link['content-type'] === "application/pdf" && typeof link.URL === "string"
+        ) : undefined;
+        const pdfUrl = typeof pdf?.URL === "string" ? pdf.URL : "";
+        const count = data['is-referenced-by-count'];
+        const citationCount = typeof count === "number" && Number.isSafeInteger(count) && count >= 0 ? count : undefined;
         return {
             title,
             author,
@@ -55,6 +79,9 @@ class CrossrefInfo {
             doiUrl,
             pdfUrl,
             citationCount,
+            citation: citationCount === undefined ? undefined : {
+                count: citationCount, source: "crossref",
+            },
         }
     }
 }

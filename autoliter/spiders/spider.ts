@@ -3,6 +3,9 @@ import ArxivInfo from "./arxivInfo";
 import CrossrefInfo from "./crossrefInfo";
 import BMInfo from "./bmInfo";
 import SemanticScholarClient from "./semanticScholarInfo";
+import UsenixInfo, { isUsenixUrl } from "./usenixInfo";
+import { validCitationCount } from "autoliter/citationLinks";
+import { PublicError, errorMessage } from "./response";
 import type { PaperInfo, SemanticScholarInfo, SemanticScholarOptions } from "autoliter/types";
 
 class Spider {
@@ -24,7 +27,9 @@ class Spider {
             doi - digital object identifier
             medbiorxivId - medrxiv or biorxiv id
         */
-		if (identifier.match(/10\.(?!1101)[0-9]{4,9}\/.+/)) {
+		if (isUsenixUrl(identifier)) {
+			return "usenix";
+		} else if (identifier.match(/^10\.(?!1101\/)[0-9]{4,9}\/\S+$/)) {
 			return "doi";
 		} else if (identifier.match(/10\.1101\/.+/)) {
 			return "medbiorxivId";
@@ -46,10 +51,14 @@ class Spider {
 		/*
         paperID: the paper id like 2022.12345
         */
+		paperID = paperID.trim();
 		const id_type = this.classify(paperID);
 		try {
 			let paperInfo: PaperInfo;
 			switch (id_type) {
+				case "usenix":
+					paperInfo = await new UsenixInfo().getInfo(paperID);
+					break;
 				case "arxivId":
 					paperInfo = await this.arxivInfo.getInfoByArxivId(paperID);
 					break;
@@ -60,7 +69,7 @@ class Spider {
 					paperInfo = await this.bmInfo.getInfoByBMId(paperID);
 					break;
 				default:
-					throw new Error(`Unrecognized paperID: "${paperID}"`);
+					throw new PublicError("Unrecognized paper identifier. Use an arXiv ID, DOI, or official USENIX presentation URL.");
 			}
 			paperInfo.id = paperID;
 			paperInfo.idType = id_type;
@@ -68,9 +77,10 @@ class Spider {
 				paperInfo,
 				semanticOptions
 			);
-		} catch (error) {
-			new Notice(`${error.message}`);
-			throw new Error(`Error in getPaperInfo: ${error.message}`);
+		} catch (error: unknown) {
+			const message = errorMessage(error);
+			new Notice(message);
+			throw new PublicError(`Error in getPaperInfo: ${message}`);
 		}
 	}
 
@@ -104,6 +114,11 @@ class Spider {
 		paperInfo.s2Url = semanticInfo.url || paperInfo.s2Url;
 		paperInfo.citationCount =
 			semanticInfo.citationCount ?? paperInfo.citationCount;
+		if (validCitationCount(semanticInfo.citationCount)) {
+			paperInfo.citation = {
+				count: semanticInfo.citationCount, source: "semantic_scholar",
+			};
+		}
 		paperInfo.venue = paperInfo.venue || semanticInfo.venue;
 		paperInfo.year = paperInfo.year || semanticInfo.year;
 		paperInfo.pdfUrl =

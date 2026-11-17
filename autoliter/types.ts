@@ -1,10 +1,19 @@
 type Dict = { [key: string]: any };
 
+type CitationSource = "crossref" | "semantic_scholar";
+
+interface CitationSnapshot {
+	count: number;
+	source: CitationSource;
+}
+
 interface SemanticScholarAuthor {
 	name?: string;
 }
 
 interface SemanticScholarInfo {
+	paperId?: string;
+	externalIds?: { DOI?: string; ArXiv?: string };
 	title?: string;
 	year?: number;
 	venue?: string;
@@ -41,11 +50,14 @@ interface PaperInfo extends Dict {
 	containerTitle?: string;
 	citationCount?: number;
 	s2Url?: string;
+	citation?: CitationSnapshot;
 	semanticScholar?: SemanticScholarInfo;
 	error?: string;
 }
 
 export type {
+	CitationSnapshot,
+	CitationSource,
 	Dict,
 	PaperInfo,
 	SemanticScholarInfo,

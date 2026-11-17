@@ -1,6 +1,7 @@
 import CrossrefInfo from "./crossrefInfo";
 import { PaperInfo } from "autoliter/types";
 import { requestUrl } from "obsidian";
+import { PublicError, errorMessage } from "./response";
 
 
 class BMInfo {
@@ -25,11 +26,11 @@ class BMInfo {
                     }
                     return this.extractInfo(data);
                 }
-            } catch (error) {
-                throw new Error(`Error in getInfoByBMxivId: ${error.message}(request url: ${url})`);
+            } catch (error: unknown) {
+                throw new PublicError(`bioRxiv/medRxiv lookup failed: ${errorMessage(error)}`);
             }
         }
-        throw new Error(`Error in getInfoByBMxivId: No posts found`);
+        throw new PublicError("bioRxiv/medRxiv lookup failed: No posts found");
     }
 
     extractInfo(data: any): PaperInfo {
